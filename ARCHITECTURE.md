@@ -1,5 +1,70 @@
 # On-Call Copilot — Architecture
 
+Detailed system architecture and component design.
+
+---
+
+## Table of Contents
+
+**Foundations**
+1. [Overview](#1-overview)
+2. [High-Level Architecture](#2-high-level-architecture)
+3. [Docker Compose Architecture](#3-docker-compose-architecture)
+4. [Application Layers](#4-application-layers)
+
+**Ingestion & Storage**
+
+5. [Ingestion Pipeline](#5-ingestion-pipeline)
+6. [Document Model](#6-document-model)
+7. [Embedding Flow](#7-embedding-flow)
+
+**Retrieval**
+
+8. [Retrieval Architecture](#8-retrieval-architecture)
+9. [Vector Search](#9-vector-search)
+10. [BM25 / Full-Text Retrieval](#10-bm25--full-text-retrieval)
+11. [Hybrid Retrieval](#11-hybrid-retrieval)
+12. [Cross-Encoder Reranking](#12-cross-encoder-reranking)
+13. [Query Expansion](#13-query-expansion)
+
+**Agent**
+
+14. [Agent Architecture](#14-agent-architecture)
+15. [Agent Tools](#15-agent-tools)
+16. [Example Agent Workflow](#16-example-agent-workflow)
+
+**API & Persistence**
+
+17. [Chat API](#17-chat-api)
+18. [Server-Sent Events](#18-server-sent-events)
+19. [Session Management](#19-session-management)
+20. [Database Architecture](#20-database-architecture)
+21. [PostgreSQL Extensions](#21-postgresql-extensions)
+22. [API and Database Communication](#22-api-and-database-communication)
+23. [Redis](#23-redis)
+
+**Frontend & Configuration**
+
+24. [Streamlit Frontend](#24-streamlit-frontend)
+25. [Configuration and Environment Separation](#25-configuration-and-environment-separation)
+26. [Host vs Container Networking](#26-host-vs-container-networking)
+
+**End-to-End Flows**
+
+27. [End-to-End Request Flow](#27-end-to-end-request-flow)
+28. [End-to-End Incident Investigation Flow](#28-end-to-end-incident-investigation-flow)
+29. [Postmortem Generation Flow](#29-postmortem-generation-flow)
+
+**Operations & Design**
+
+30. [Error Isolation Strategy](#30-error-isolation-strategy)
+31. [Current Architecture Limitations](#31-current-architecture-limitations)
+32. [Production Evolution](#32-production-evolution)
+33. [Design Principles](#33-design-principles)
+34. [Summary](#34-summary)
+
+---
+
 ## 1. Overview
 
 On-Call Copilot is a RAG-powered incident response assistant designed around a typical DevOps/SRE incident investigation workflow.
@@ -25,139 +90,157 @@ The architecture separates the system into four major application responsibiliti
 │                     On-Call Copilot                         │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  Ingestion       Retrieval       Agent        Chat API      │
-│  Pipeline        Service         Loop         + SSE         │
+│   Ingestion      Retrieval        Agent         Chat API    │
+│   Pipeline        Service         Loop           + SSE      │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
-2. High-Level Architecture
-                         ┌─────────────────────┐
-                         │      User           │
-                         │  On-call Engineer   │
-                         └──────────┬──────────┘
-                                    │
-                                    │ Browser
-                                    ▼
-                         ┌─────────────────────┐
-                         │    Streamlit UI     │
-                         │       :8501         │
-                         └──────────┬──────────┘
-                                    │
-                                    │ HTTP / SSE
-                                    ▼
-                         ┌─────────────────────┐
-                         │     FastAPI API     │
-                         │       :8002         │
-                         └──────────┬──────────┘
-                                    │
-                                    ▼
-                         ┌─────────────────────┐
-                         │     Agent Loop      │
-                         │   ReAct-style flow  │
-                         └──────────┬──────────┘
-                                    │
-                ┌───────────────────┼───────────────────┐
-                │                   │                   │
-                ▼                   ▼                   ▼
-       ┌────────────────┐  ┌────────────────┐  ┌────────────────┐
-       │ Knowledge      │  │ Incident       │  │ Kubernetes     │
-       │ Retrieval      │  │ Tools          │  │ Tools          │
-       └───────┬────────┘  └───────┬────────┘  └────────────────┘
-               │                   │
-               ▼                   ▼
-       ┌─────────────────────────────────────┐
-       │          PostgreSQL + pgvector       │
-       │                                     │
-       │ Documents / Chunks / Incidents      │
-       │ Chat Sessions / Messages            │
-       └──────────────────┬──────────────────┘
-                          │
-                          ▼
-                     ┌─────────┐
-                     │  Redis  │
-                     │  :6379  │
-                     └─────────┘
-3. Docker Compose Architecture
+```
+
+---
+
+## 2. High-Level Architecture
+
+```text
+                     ┌─────────────────────┐
+                     │        User         │
+                     │  On-call Engineer   │
+                     └──────────┬──────────┘
+                                │ Browser
+                                ▼
+                     ┌─────────────────────┐
+                     │    Streamlit UI     │
+                     │        :8501        │
+                     └──────────┬──────────┘
+                                │ HTTP / SSE
+                                ▼
+                     ┌─────────────────────┐
+                     │     FastAPI API     │
+                     │        :8002        │
+                     └──────────┬──────────┘
+                                │
+                                ▼
+                     ┌─────────────────────┐
+                     │     Agent Loop      │
+                     │  ReAct-style flow   │
+                     └──────────┬──────────┘
+                                │
+            ┌───────────────────┼───────────────────┐
+            │                   │                   │
+            ▼                   ▼                   ▼
+   ┌────────────────┐  ┌────────────────┐  ┌────────────────┐
+   │   Knowledge    │  │    Incident    │  │   Kubernetes   │
+   │   Retrieval    │  │     Tools      │  │     Tools      │
+   └───────┬────────┘  └───────┬────────┘  └────────────────┘
+           │                   │
+           └─────────┬─────────┘
+                     ▼
+   ┌─────────────────────────────────────┐
+   │        PostgreSQL + pgvector        │
+   │                                     │
+   │    Documents / Chunks / Incidents   │
+   │    Chat Sessions / Messages         │
+   └──────────────────┬──────────────────┘
+                      │
+                      ▼
+                 ┌─────────┐
+                 │  Redis  │
+                 │  :6379  │
+                 └─────────┘
+```
+
+---
+
+## 3. Docker Compose Architecture
 
 The development environment is composed of four main services:
 
+```text
 ┌───────────────────────────────────────────────┐
-│              Docker Compose                   │
+│               Docker Compose                  │
 │                                               │
-│  ┌─────────────┐       ┌─────────────┐       │
-│  │ PostgreSQL  │       │    Redis    │       │
-│  │  + pgvector │       │             │       │
-│  │    :5434    │       │    :6379    │       │
-│  └──────┬──────┘       └──────┬──────┘       │
-│         │                     │              │
-│         └──────────┬──────────┘              │
-│                    │                         │
-│             ┌──────▼──────┐                  │
-│             │   FastAPI   │                  │
-│             │     API     │                  │
-│             │    :8000    │                  │
-│             └──────┬──────┘                  │
-│                    │                         │
-│             ┌──────▼──────┐                  │
-│             │  Streamlit  │                  │
-│             │     UI      │                  │
-│             │    :8501    │                  │
-│             └─────────────┘                  │
+│   ┌─────────────┐        ┌─────────────┐      │
+│   │ PostgreSQL  │        │    Redis    │      │
+│   │  + pgvector │        │             │      │
+│   │    :5434    │        │    :6379    │      │
+│   └──────┬──────┘        └──────┬──────┘      │
+│          │                      │             │
+│          └──────────┬───────────┘             │
+│                     │                         │
+│              ┌──────▼──────┐                  │
+│              │   FastAPI   │                  │
+│              │     API     │                  │
+│              │    :8000    │                  │
+│              └──────┬──────┘                  │
+│                     │                         │
+│              ┌──────▼──────┐                  │
+│              │  Streamlit  │                  │
+│              │     UI      │                  │
+│              │    :8501    │                  │
+│              └─────────────┘                  │
 │                                               │
 └───────────────────────────────────────────────┘
+```
 
-The host-side API port is currently mapped to 8002 because port 8000 was already occupied by another Docker workload on the development machine.
+The host-side API port is currently mapped to `8002` because port `8000` was already occupied by another Docker workload on the development machine.
 
-Host                    Container
+| Host | Container |
+| --- | --- |
+| `localhost:8002` | `api:8000` |
+| `localhost:8501` | `ui:8501` |
+| `localhost:5434` | `postgres:5432` |
+| `localhost:6379` | `redis:6379` |
 
-localhost:8002   ────►  api:8000
-localhost:8501   ────►  ui:8501
-localhost:5434   ────►  postgres:5432
-localhost:6379   ────►  redis:6379
+Inside the Docker network, services communicate using Compose service names:
 
-Inside the Docker network, services communicate using Compose service names.
-
-For example:
-
+```text
 Streamlit → http://api:8000
 API       → postgres:5432
 API       → redis:6379
-4. Application Layers
+```
+
+---
+
+## 4. Application Layers
 
 The application is organized into several logical layers.
 
+```text
 ┌──────────────────────────────────────────┐
 │              Presentation                │
-│             Streamlit UI                 │
+│              Streamlit UI                │
 └────────────────────┬─────────────────────┘
                      │
 ┌────────────────────▼─────────────────────┐
-│               API Layer                  │
+│                API Layer                 │
 │              FastAPI + SSE               │
 └────────────────────┬─────────────────────┘
                      │
 ┌────────────────────▼─────────────────────┐
-│              Agent Layer                 │
+│               Agent Layer                │
 │          ReAct-style Agent Loop          │
 └────────────────────┬─────────────────────┘
                      │
 ┌────────────────────▼─────────────────────┐
-│              Tool Layer                  │
+│                Tool Layer                │
 │ Knowledge / Incidents / K8s / Postmortem │
 └────────────────────┬─────────────────────┘
                      │
           ┌──────────┴──────────┐
           ▼                     ▼
 ┌─────────────────────┐ ┌──────────────────┐
-│ Retrieval Layer     │ │ Database Layer   │
-│ Vector + BM25       │ │ PostgreSQL       │
-│ + Reranking         │ │ Redis            │
+│   Retrieval Layer   │ │  Database Layer  │
+│    Vector + BM25    │ │    PostgreSQL    │
+│     + Reranking     │ │      Redis       │
 └─────────────────────┘ └──────────────────┘
-5. Ingestion Pipeline
+```
 
-Operational knowledge first enters through the ingestion pipeline.
+---
 
-Current demo sources include Markdown runbooks and postmortems.
+## 5. Ingestion Pipeline
 
+Operational knowledge first enters through the ingestion pipeline. Current demo sources include Markdown runbooks and postmortems.
+
+```text
 Markdown Documents
         │
         ▼
@@ -170,121 +253,119 @@ Markdown Documents
  Semantic Chunking
         │
         ▼
-   Text Chunks
+    Text Chunks
         │
         ▼
-    Embedding
+     Embedding
         │
         ▼
  PostgreSQL + pgvector
+```
 
-The main components are located under:
+The main components live under `app/ingestion/`:
 
+```text
 app/ingestion/
+├── loaders/
+├── chunker.py
+├── embedder.py
+└── pipeline.py
+```
 
-including:
+---
 
-loaders/
-chunker.py
-embedder.py
-pipeline.py
-6. Document Model
+## 6. Document Model
 
-Documents are stored separately from their chunks.
+Documents are stored separately from their chunks:
 
-Conceptually:
-
+```text
 Document
    │
    ├── Chunk 0
    ├── Chunk 1
    ├── Chunk 2
    └── ...
+```
 
-The document contains information such as:
-
-id
-source_type
-source_id
-title
-content
-metadata
-created_at
-updated_at
-
-Chunks contain:
-
-id
-document_id
-chunk_index
-content
-embedding
-token_count
-metadata
-created_at
+| Document fields | Chunk fields |
+| --- | --- |
+| `id` | `id` |
+| `source_type` | `document_id` |
+| `source_id` | `chunk_index` |
+| `title` | `content` |
+| `content` | `embedding` |
+| `metadata` | `token_count` |
+| `created_at` | `metadata` |
+| `updated_at` | `created_at` |
 
 This separation allows the system to preserve document-level metadata while performing retrieval at chunk level.
 
-7. Embedding Flow
+---
+
+## 7. Embedding Flow
 
 During ingestion, text chunks are converted into numerical vectors.
 
+```text
 Chunk Text
     │
     ▼
 Embedding Model
     │
     ▼
-Vector
+  Vector
     │
     ▼
 PostgreSQL + pgvector
+```
 
-The current project supports an OpenAI embedding implementation and contains a local embedding implementation for future/local deployment scenarios.
+The project supports an OpenAI embedding implementation and contains a local embedding implementation for future/local deployment scenarios.
 
 The existing demo data was populated with embeddings and verified in PostgreSQL.
 
-8. Retrieval Architecture
+---
 
-The retrieval layer is one of the core components of the project.
+## 8. Retrieval Architecture
 
-It combines two retrieval approaches:
+The retrieval layer is one of the core components of the project. It combines two retrieval approaches:
 
+```text
                     User Query
                         │
              ┌──────────┴──────────┐
              │                     │
              ▼                     ▼
-       Query Embedding         BM25/Text Search
+       Query Embedding       BM25/Text Search
              │                     │
              ▼                     ▼
-       Vector Search           PostgreSQL
+        Vector Search          PostgreSQL
              │                     │
              └──────────┬──────────┘
                         ▼
-                 Hybrid Search
+                  Hybrid Search
                         │
                         ▼
                 Score Normalization
                         │
                         ▼
-                 Result Merging
+                  Result Merging
                         │
                         ▼
-               Cross-Encoder Reranker
+              Cross-Encoder Reranker
                         │
                         ▼
                   Final Results
+```
 
-The retrieval implementation is primarily under:
+The retrieval implementation is primarily under `app/retrieval/`.
 
-app/retrieval/
-9. Vector Search
+---
+
+## 9. Vector Search
 
 Vector retrieval uses pgvector similarity search.
 
-Conceptually:
-
+```text
 User Query
     │
     ▼
@@ -294,29 +375,23 @@ Embedding
 Query Vector
     │
     ▼
-pgvector
+  pgvector
     │
     ▼
 Nearest Chunks
+```
 
-The similarity operation is performed against stored chunk embeddings.
+The similarity operation is performed against stored chunk embeddings. This allows semantically related content to be retrieved even when the wording differs.
 
-This allows semantically related content to be retrieved even when the wording differs.
+For example, the query `"database pool exhaustion"` may retrieve documentation containing `"PostgreSQL connection saturation"` even though the exact phrase is different.
 
-For example:
+---
 
-"database pool exhaustion"
-
-may retrieve documentation containing:
-
-"PostgreSQL connection saturation"
-
-even if the exact phrase is different.
-
-10. BM25 / Full-Text Retrieval
+## 10. BM25 / Full-Text Retrieval
 
 The second retrieval strategy uses PostgreSQL full-text search.
 
+```text
 Query
   │
   ▼
@@ -327,39 +402,41 @@ Full-text matching
   │
   ▼
 Ranked results
+```
 
 This is useful for exact operational terminology such as:
 
-CrashLoopBackOff
-PgBouncer
-HighErrorRate_payments-api
-DATABASE_URL
+- `CrashLoopBackOff`
+- `PgBouncer`
+- `HighErrorRate_payments-api`
+- `DATABASE_URL`
 
 The combination of vector and lexical retrieval provides better coverage than either approach alone.
 
-11. Hybrid Retrieval
+---
+
+## 11. Hybrid Retrieval
 
 Vector and BM25 results are normalized and combined using configurable weights.
 
 The current implementation uses:
 
+```text
 Vector weight = 0.7
 BM25 weight   = 0.3
 
-Conceptually:
+Hybrid Score = (Vector Score × 0.7) + (BM25 Score × 0.3)
+```
 
-Hybrid Score =
-    (Vector Score × 0.7)
-  + (BM25 Score × 0.3)
+Results are merged using the chunk ID. If a chunk appears in both retrieval result sets, its weighted scores are combined.
 
-Results are merged using the chunk ID.
+---
 
-If a chunk appears in both retrieval result sets, its weighted scores are combined.
-
-12. Cross-Encoder Reranking
+## 12. Cross-Encoder Reranking
 
 After hybrid retrieval, candidate results can be reranked using a cross-encoder.
 
+```text
 Hybrid Results
       │
       ▼
@@ -367,9 +444,9 @@ Candidate Documents
       │
       ▼
 ┌───────────────────────────┐
-│ Cross Encoder             │
+│      Cross Encoder        │
 │                           │
-│ Query + Candidate Chunk   │
+│  Query + Candidate Chunk  │
 └─────────────┬─────────────┘
               │
               ▼
@@ -377,13 +454,17 @@ Candidate Documents
               │
               ▼
        Final Ranking
+```
 
 This provides a second-stage ranking mechanism after the initial high-recall retrieval.
 
-13. Query Expansion
+---
+
+## 13. Query Expansion
 
 The retrieval service also supports optional query expansion.
 
+```text
 Original Query
       │
       ▼
@@ -395,21 +476,21 @@ Query Expansion
                 │
                 ▼
           Hybrid Retrieval
+```
 
-The resulting searches are merged by chunk ID.
+The resulting searches are merged by chunk ID. If query expansion is unavailable, the service falls back to the original query.
 
-If query expansion is unavailable, the service can fall back to the original query.
+---
 
-14. Agent Architecture
+## 14. Agent Architecture
 
 The agent uses a ReAct-style loop.
 
-Conceptually:
-
+```text
 User Query
     │
     ▼
-Agent
+  Agent
     │
     ▼
 Select Tool
@@ -424,29 +505,25 @@ Observe Result
 Select Next Action
     │
     ▼
-...
+   ...
     │
     ▼
 Final Answer
+```
 
-The agent implementation is located under:
+The agent implementation is located under `app/agent/`. The loop maintains agent state and tracks tool execution.
 
-app/agent/
+---
 
-The loop maintains agent state and tracks tool execution.
-
-15. Agent Tools
+## 15. Agent Tools
 
 The current agent exposes five tools.
 
-search_knowledge
-
-Purpose:
+### `search_knowledge`
 
 Search operational knowledge using hybrid RAG.
 
-Flow:
-
+```text
 Query
   ↓
 Embedding
@@ -458,21 +535,13 @@ Hybrid Search
 Reranking
   ↓
 Relevant Chunks
-search_incidents
+```
 
-Purpose:
+### `search_incidents`
 
-Search historical incidents.
+Search historical incidents. Supports filtering by alert name, service, severity, and status.
 
-It can filter by:
-
-alert name
-service
-severity
-status
-
-Flow:
-
+```text
 Agent
   ↓
 search_incidents
@@ -480,35 +549,30 @@ search_incidents
 PostgreSQL
   ↓
 Historical incidents
-get_incident_timeline
+```
 
-Purpose:
+### `get_incident_timeline`
 
-Retrieve detailed information for a specific incident.
+Retrieve detailed information for a specific incident. Returns:
 
-The tool returns information including:
-
-Incident
-Severity
-Status
-Services
-Start time
-Resolution time
-Root cause
-Resolution steps
-Tags
-Raw payload
+- Incident
+- Severity
+- Status
+- Services
+- Start time
+- Resolution time
+- Root cause
+- Resolution steps
+- Tags
+- Raw payload
 
 It can also retrieve a linked postmortem when one is associated with the incident.
 
-query_k8s
-
-Purpose:
+### `query_k8s`
 
 Perform read-only Kubernetes investigation.
 
-The intended workflow is:
-
+```text
 Agent
   ↓
 Kubernetes Tool
@@ -518,39 +582,29 @@ Pods / Logs / Events / Resources
 Observation
   ↓
 Agent
+```
 
-Production deployment would require appropriate Kubernetes RBAC and security controls.
+> **Note:** Production deployment would require appropriate Kubernetes RBAC and security controls.
 
-draft_postmortem
-
-Purpose:
+### `draft_postmortem`
 
 Generate a structured postmortem draft.
 
-Input can include:
+**Input can include:** summary, timeline, root cause, impact, resolution, action items, citations.
 
-Summary
-Timeline
-Root Cause
-Impact
-Resolution
-Action Items
-Citations
+**Output:** structured Markdown postmortem.
 
-Output:
+> **Note:** The generated document is a draft and should be reviewed by an engineer before publication.
 
-Structured Markdown Postmortem
+---
 
-The generated document is a draft and should be reviewed by an engineer before publication.
+## 16. Example Agent Workflow
 
-16. Example Agent Workflow
+### Historical incident question
 
-Consider the query:
+> What happened in the previous `HighErrorRate_payments-api` incidents?
 
-What happened in the previous HighErrorRate_payments-api incidents?
-
-The conceptual agent flow is:
-
+```text
 User
  │
  ▼
@@ -576,13 +630,13 @@ Final synthesis
  │
  ▼
 Streaming response
+```
 
-For a knowledge question:
+### Knowledge question
 
-How do I troubleshoot database connection pool exhaustion?
+> How do I troubleshoot database connection pool exhaustion?
 
-the flow becomes:
-
+```text
 User
  │
  ▼
@@ -595,11 +649,8 @@ search_knowledge
 RetrievalService
  │
  ├──► Vector Search
- │
  ├──► BM25
- │
  ├──► Hybrid Merge
- │
  └──► Reranking
  │
  ▼
@@ -610,18 +661,21 @@ Agent
  │
  ▼
 Final Answer
-17. Chat API
+```
 
-The FastAPI backend exposes the chat functionality.
+---
 
-The main endpoint is:
+## 17. Chat API
 
+The FastAPI backend exposes the chat functionality. The main endpoint is:
+
+```text
 POST /api/v1/chat/stream
+```
 
-The endpoint accepts a query and session ID.
+The endpoint accepts a query and a session ID.
 
-Conceptually:
-
+```text
 POST /chat/stream
         │
         ▼
@@ -639,44 +693,47 @@ POST /chat/stream
         │
         ▼
    Streamlit UI
-18. Server-Sent Events
+```
+
+---
+
+## 18. Server-Sent Events
 
 The system uses SSE for streaming.
 
 Instead of waiting for the entire agent execution:
 
+```text
 Request
    │
    ▼
-Wait
+  Wait
    │
    ▼
 Complete response
+```
 
 the client receives incremental events:
 
+```text
 Request
    │
    ├── start
-   │
    ├── tool_start
-   │
    ├── tool_result
-   │
    ├── content
-   │
    └── complete
+```
 
 This is particularly useful for long-running agent workflows.
 
-19. Session Management
+---
 
-Chat sessions and messages are persisted in PostgreSQL.
+## 19. Session Management
 
-Redis is also part of the runtime architecture and is used for session/cache-related functionality.
+Chat sessions and messages are persisted in PostgreSQL. Redis is also part of the runtime architecture and is used for session/cache-related functionality.
 
-Conceptually:
-
+```text
 User
  │
  ▼
@@ -686,24 +743,26 @@ Chat Session
  ├── Message 2
  ├── Message 3
  └── ...
+```
 
 This allows conversations to maintain context rather than treating every query as completely independent.
 
-20. Database Architecture
+---
 
-PostgreSQL stores the core application data.
+## 20. Database Architecture
 
-Current tables include:
+PostgreSQL stores the core application data. Current tables include:
 
-documents
-chunks
-incidents
-chat_sessions
-chat_messages
-alembic_version
+- `documents`
+- `chunks`
+- `incidents`
+- `chat_sessions`
+- `chat_messages`
+- `alembic_version`
 
 Conceptual relationships:
 
+```text
 documents
     │
     └──────< chunks
@@ -716,81 +775,87 @@ incidents
 chat_sessions
     │
     └──────< chat_messages
-21. PostgreSQL Extensions
+```
+
+---
+
+## 21. PostgreSQL Extensions
 
 The database is configured with:
 
-pgvector
-pg_trgm
+- **pgvector** — vector similarity capabilities
+- **pg_trgm** — efficient text similarity operations
 
-along with PostgreSQL's standard plpgsql extension.
+along with PostgreSQL's standard `plpgsql` extension.
 
-pgvector provides vector similarity capabilities.
+---
 
-pg_trgm can support efficient text similarity operations.
-
-22. API and Database Communication
+## 22. API and Database Communication
 
 The API uses SQLAlchemy's asynchronous database stack.
 
-Conceptually:
-
+```text
 FastAPI
    │
    ▼
 SQLAlchemy AsyncSession
    │
    ▼
-asyncpg
+ asyncpg
    │
    ▼
 PostgreSQL
+```
 
 This allows database operations to be integrated with the asynchronous FastAPI request flow.
 
-23. Redis
+---
+
+## 23. Redis
 
 Redis runs as a separate Docker Compose service.
 
+```text
 FastAPI
    │
    ▼
-Redis
+ Redis
    │
    ├── Session/cache functionality
    └── Fast temporary state
+```
 
 Redis is intentionally separated from PostgreSQL because it serves a different role:
 
+```text
 PostgreSQL → Persistent application data
 Redis      → Fast temporary/cache/session data
-24. Streamlit Frontend
+```
 
-The frontend is implemented using Streamlit.
+---
 
-Location:
+## 24. Streamlit Frontend
 
-ui/streamlit_app.py
+The frontend is implemented using Streamlit, at `ui/streamlit_app.py`.
 
-The UI provides:
-
+```text
 ┌─────────────────────────────────────────┐
-│          On-Call Copilot                │
-├─────────────────────────────────────────┤
+│             On-Call Copilot             │
+├───────────────────┬─────────────────────┤
 │ Sessions          │ Chat                │
 │                   │                     │
 │ New Chat          │ User Query          │
 │                   │       ↓             │
 │ Previous Chats    │ Agent Response      │
 │                   │       ↓             │
-│                   │ Tool Activity        │
-│                   │ Citations            │
-└─────────────────────────────────────────┘
+│                   │ Tool Activity       │
+│                   │ Citations           │
+└───────────────────┴─────────────────────┘
+```
 
-The frontend does not directly access PostgreSQL.
+The frontend does not directly access PostgreSQL. Instead:
 
-Instead:
-
+```text
 Streamlit
     ↓
 FastAPI
@@ -798,15 +863,17 @@ FastAPI
 Application Services
     ↓
 Database / Redis
+```
 
 This separation keeps the frontend decoupled from backend implementation details.
 
-25. Configuration and Environment Separation
+---
 
-The project uses environment variables for runtime configuration.
+## 25. Configuration and Environment Separation
 
-Important configuration areas include:
+The project uses environment variables for runtime configuration. Important configuration areas include:
 
+```text
 DATABASE_URL
 REDIS_URL
 OPENAI_API_KEY
@@ -816,55 +883,55 @@ LLM_MODEL
 RETRIEVAL_TOP_K
 RETRIEVAL_RERANK_TOP_K
 AGENT_MAX_TURNS
+```
 
-The .env file is intentionally excluded from Git.
+The `.env` file is intentionally excluded from Git. A template is provided through `.env.example`.
 
-A template is provided through:
+---
 
-.env.example
-26. Host vs Container Networking
+## 26. Host vs Container Networking
 
 One important architectural detail is the difference between host networking and Docker networking.
 
-From the host:
+**From the host:**
 
+```text
 Browser
    ↓
 localhost:8501
    ↓
 Streamlit
+```
 
-API health from the host:
-
+```bash
 curl localhost:8002/api/v1/health
+```
 
-From inside Docker:
+**From inside Docker:**
 
+```text
 Streamlit
    ↓
 http://api:8000
    ↓
 FastAPI
+```
 
-The API container connects to PostgreSQL using:
+The API container connects to PostgreSQL using `postgres:5432` — **not** `localhost:5434`.
 
-postgres:5432
+This distinction was important during development and is documented in [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
 
-not:
+---
 
-localhost:5434
-
-This distinction was important during development and is documented in TROUBLESHOOTING.md.
-
-27. End-to-End Request Flow
+## 27. End-to-End Request Flow
 
 A complete knowledge-based request looks like:
 
+```text
                  User
                   │
                   ▼
             Streamlit UI
-                  │
                   │ HTTP
                   ▼
              FastAPI API
@@ -887,7 +954,7 @@ A complete knowledge-based request looks like:
            Hybrid Ranking
                   │
                   ▼
-          Cross-Encoder
+           Cross-Encoder
              Reranking
                   │
                   ▼
@@ -904,10 +971,15 @@ A complete knowledge-based request looks like:
                   │
                   ▼
             Streamlit UI
-28. End-to-End Incident Investigation Flow
+```
+
+---
+
+## 28. End-to-End Incident Investigation Flow
 
 For an incident-focused query:
 
+```text
 User
  │
  ▼
@@ -943,13 +1015,15 @@ SSE
  │
  ▼
 Streamlit
+```
 
-If more context is required, the agent can use additional tools such as:
+If more context is required, the agent can use additional tools such as `search_knowledge`, `get_incident_timeline`, and `query_k8s`.
 
-search_knowledge
-get_incident_timeline
-query_k8s
-29. Postmortem Generation Flow
+---
+
+## 29. Postmortem Generation Flow
+
+```text
 Incident Context
        │
        ▼
@@ -959,7 +1033,7 @@ Historical Data
 Retrieved Knowledge
        │
        ▼
-Agent
+     Agent
        │
        ▼
 draft_postmortem
@@ -968,118 +1042,102 @@ draft_postmortem
 Structured Markdown
        │
        ▼
-Human Review
+  Human Review
        │
        ▼
 Final Postmortem
+```
 
 The system intentionally keeps a human review step before a generated postmortem is treated as authoritative.
 
-30. Error Isolation Strategy
+---
+
+## 30. Error Isolation Strategy
 
 The project was developed and tested layer-by-layer.
 
+```text
 Infrastructure
       │
       ▼
-Database
+   Database
       │
       ▼
-Migrations
+  Migrations
       │
       ▼
-Seed Data
+  Seed Data
       │
       ▼
-Ingestion
+  Ingestion
       │
       ▼
-Retrieval
+  Retrieval
       │
       ▼
-Agent Tools
+ Agent Tools
       │
       ▼
-API
+     API
       │
       ▼
 Docker Networking
       │
       ▼
-Streamlit
+  Streamlit
       │
       ▼
 End-to-End Flow
+```
 
-This approach makes it easier to determine whether a failure belongs to:
+This approach makes it easier to determine whether a failure belongs to infrastructure, configuration, the database, retrieval, agent logic, the API, networking, or the frontend.
 
-Infrastructure
-Configuration
-Database
-Retrieval
-Agent logic
-API
-Networking
-Frontend
+Detailed debugging examples are available in [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
 
-Detailed debugging examples are available in:
+---
 
-TROUBLESHOOTING.md
-31. Current Architecture Limitations
+## 31. Current Architecture Limitations
 
 The current architecture is intentionally a portfolio/demo implementation.
 
-Known limitations include:
+**Embedding provider coupling**
+The retrieval service currently initializes the OpenAI-based embedder directly. The local embedding implementation exists but requires additional integration for transparent fallback.
 
-Embedding provider coupling
+**Embedding dimension compatibility**
+The stored demo vectors and the local embedding model must use compatible dimensions before switching providers.
 
-The retrieval service currently initializes the OpenAI-based embedder directly.
-
-The local embedding implementation exists but requires additional integration for transparent fallback.
-
-Embedding dimension compatibility
-
-The stored demo vectors and local embedding model must use compatible dimensions before switching providers.
-
-Authentication
-
+**Authentication**
 Authentication and authorization are not currently implemented.
 
-Kubernetes security
+**Kubernetes security**
+A production Kubernetes deployment would require RBAC, service account controls, network policies, audit logging, and secret management.
 
-A production Kubernetes deployment would require:
+**LLM provider**
+The project includes a mock LLM mode for demonstration when an OpenAI API key is unavailable. Production deployment would require a properly configured LLM and embedding provider.
 
-RBAC
-Service account controls
-Network policies
-Audit logging
-Secret management
-LLM provider
+---
 
-The project includes a mock LLM mode for demonstration when an OpenAI API key is unavailable.
-
-Production deployment would require a properly configured LLM and embedding provider.
-
-32. Production Evolution
+## 32. Production Evolution
 
 A possible production architecture could evolve toward:
 
+```text
                     Load Balancer
                           │
                           ▼
-                   API / Gateway
+                    API / Gateway
                           │
              ┌────────────┴────────────┐
              │                         │
              ▼                         ▼
-       Agent Services            Ingestion Workers
+       Agent Services           Ingestion Workers
              │                         │
              ▼                         ▼
        Retrieval Layer          Document Pipeline
              │                         │
              ├──────────────┬──────────┤
              ▼              ▼          ▼
-        PostgreSQL        Redis     Object Storage
+        PostgreSQL        Redis   Object Storage
         + pgvector
              │
              ▼
@@ -1087,54 +1145,53 @@ A possible production architecture could evolve toward:
        ├── Metrics
        ├── Logs
        └── Traces
+```
 
 Potential production additions include:
 
-Authentication/RBAC
-Kubernetes-native deployment
-Managed PostgreSQL
-Managed Redis
-Object storage
-Background ingestion workers
-OpenTelemetry
-Langfuse/LangSmith tracing
-PagerDuty integration
-Slack integration
-CI/CD
-Evaluation gates
-Secret management
-33. Design Principles
+- Authentication / RBAC
+- Kubernetes-native deployment
+- Managed PostgreSQL
+- Managed Redis
+- Object storage
+- Background ingestion workers
+- OpenTelemetry
+- Langfuse/LangSmith tracing
+- PagerDuty integration
+- Slack integration
+- CI/CD
+- Evaluation gates
+- Secret management
 
-The architecture follows several principles.
+---
 
-Separation of concerns
+## 33. Design Principles
 
+**Separation of concerns**
 The UI, API, agent, retrieval, and persistence layers have separate responsibilities.
 
-Retrieval before generation
-
+**Retrieval before generation**
 The agent should use operational knowledge and incident history rather than relying only on the LLM's pretrained knowledge.
 
-Tool-based investigation
-
+**Tool-based investigation**
 Specialized operations are exposed as tools instead of embedding every capability directly into the prompt.
 
-Read-only operational access
-
+**Read-only operational access**
 Kubernetes investigation is designed around read-only operations.
 
-Human-in-the-loop
-
+**Human-in-the-loop**
 Generated postmortems are drafts and require human review.
 
-Layered testing
-
+**Layered testing**
 Each major component can be tested independently before validating the complete system.
 
-34. Summary
+---
+
+## 34. Summary
 
 The core architecture can be summarized as:
 
+```text
                  ┌───────────────────┐
                  │     Streamlit     │
                  │        UI         │
@@ -1154,22 +1211,31 @@ The core architecture can be summarized as:
           ┌────────────────┼────────────────┐
           │                │                │
           ▼                ▼                ▼
-    Knowledge          Incidents          K8s
-    Retrieval           Search           Tools
+     Knowledge         Incidents           K8s
+     Retrieval          Search            Tools
           │                │                │
-          └────────┬───────┴────────────────┘
-                   ▼
-          ┌─────────────────────┐
-          │ PostgreSQL          │
-          │ + pgvector          │
-          └─────────┬───────────┘
-                    │
-                    ▼
-          ┌─────────────────────┐
-          │       Redis         │
-          └─────────────────────┘
+          └────────────────┼────────────────┘
+                           ▼
+                 ┌─────────────────────┐
+                 │     PostgreSQL      │
+                 │     + pgvector      │
+                 └─────────┬───────────┘
+                           │
+                           ▼
+                 ┌─────────────────────┐
+                 │        Redis        │
+                 └─────────────────────┘
+```
 
-The key idea is to combine traditional DevOps incident data and operational documentation with modern RAG and agentic AI patterns, 
-creating an assistant that can support investigation rather than simply generate generic chatbot responses.
+The key idea is to combine traditional DevOps incident data and operational documentation with modern RAG and agentic AI patterns, creating an assistant that can support investigation rather than simply generate generic chatbot responses.
 
+---
 
+## Related Documentation
+
+| Document | Purpose |
+| --- | --- |
+| [README.md](./README.md) | Project overview and setup |
+| [DEMO.md](./DEMO.md) | End-to-end application demonstration |
+| [TESTING.md](./TESTING.md) | Test commands and verification results |
+| [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) | Problems encountered and debugging steps |
