@@ -21,7 +21,7 @@ During a production incident, engineers may need to search across:
 - Previous resolution procedures
 
 On-Call Copilot provides a conversational interface for questions such as:
-```text
+
 What happened in the previous HighErrorRate_payments-api incidents?
 
 What caused the database connection pool exhaustion incident?
