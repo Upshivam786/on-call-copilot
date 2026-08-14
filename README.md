@@ -21,8 +21,8 @@ During a production incident, engineers may need to search across:
 - Previous resolution procedures
 
 On-Call Copilot provides a conversational interface for questions such as:
-
-```text What happened in the previous HighErrorRate_payments-api incidents?
+```text
+What happened in the previous HighErrorRate_payments-api incidents?
 
 What caused the database connection pool exhaustion incident?
 
@@ -34,7 +34,7 @@ Draft a postmortem for this incident.
 
 The system retrieves relevant information and uses specialized tools to support incident investigation.
 
-Architecture
+## Architecture
 
                          ┌──────────────────────┐
                          │     Streamlit UI     │
@@ -63,7 +63,7 @@ Architecture
 
 
 
-### Retrieval Flow
+## Retrieval Flow
 
 Operational Documents
         │
