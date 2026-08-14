@@ -1,0 +1,23 @@
+# Dockerfile for On-Call Copilot UI (Streamlit)
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy packaging metadata and application code
+COPY pyproject.toml .
+COPY ui/ ./ui/
+COPY app/ ./app/
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir ".[ui]"
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "ui/streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501"]

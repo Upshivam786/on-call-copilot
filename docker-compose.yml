@@ -1,0 +1,92 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: oncall-postgres
+    environment:
+      POSTGRES_DB: oncall_copilot
+      POSTGRES_USER: oncall
+      POSTGRES_PASSWORD: oncall_dev_password
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/init-pgvector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oncall -d oncall_copilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: oncall-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # Optional: Local LLM for embeddings (uncomment to use)
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: oncall-ollama
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: oncall-api
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://oncall:oncall_dev_password@postgres:5432/oncall_copilot
+      - REDIS_URL=redis://redis:6379/0
+      - ENVIRONMENT=development
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    container_name: oncall-ui
+    environment:
+      - API_URL=http://api:8000
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./ui:/app/ui:ro
+    depends_on:
+      - api
+    command: streamlit run ui/streamlit_app.py --server.address=0.0.0.0 --server.port=8501
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  # ollama_data:
+
+networks:
+  default:
+    name: oncall-network

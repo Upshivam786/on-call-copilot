@@ -1,0 +1,92 @@
+name: Evaluation
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # Daily at 6 AM UTC
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: oncall_copilot
+          POSTGRES_USER: oncall
+          POSTGRES_PASSWORD: oncall_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install ".[dev,eval]"
+
+      - name: Run Alembic migrations
+        env:
+          DATABASE_URL: postgresql+asyncpg://oncall:oncall_test_password@localhost:5432/oncall_copilot
+        run: alembic upgrade head
+
+      - name: Seed demo data
+        env:
+          DATABASE_URL: postgresql+asyncpg://oncall:oncall_test_password@localhost:5432/oncall_copilot
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python scripts/seed_demo_data.py
+
+      - name: Ingest demo docs
+        env:
+          DATABASE_URL: postgresql+asyncpg://oncall:oncall_test_password@localhost:5432/oncall_copilot
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python scripts/ingest.py --source markdown --path ./demo_docs
+
+      - name: Run evaluations
+        env:
+          DATABASE_URL: postgresql+asyncpg://oncall:oncall_test_password@localhost:5432/oncall_copilot
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python evals/run.py --all
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: evals/results.json
+
+      - name: Comment PR with results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const results = JSON.parse(fs.readFileSync('evals/results.json', 'utf8'));
+
+            let comment = '## Evaluation Results\n\n';
+            for (const [category, metrics] of Object.entries(results)) {
+              comment += `### ${category}\n`;
+              for (const [metric, value] of Object.entries(metrics)) {
+                comment += `- ${metric}: ${value.toFixed(4)}\n`;
+              }
+              comment += '\n';
+            }
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
